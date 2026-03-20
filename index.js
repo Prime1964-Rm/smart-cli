@@ -2,6 +2,7 @@
 const path = require("path");
 const { Command } = require("commander");
 const chalk = require("chalk");
+const inquirer = require("inquirer");
 const { exec } = require("child_process");
 const fetch = require("node-fetch");
 const OpenAI = require("openai");
@@ -39,10 +40,12 @@ STRICT RULES:
 - Output ONLY JSON array of shell commands
 - NO explanation
 - NO text
-- DO NOT skip commands
+- NO backticks
+- NO sentences
 - If unsure → []
 
 Examples:
+
 Input: create two folders client and server
 Output: ["mkdir client server"]
 
@@ -76,11 +79,7 @@ async function ollama(input) {
     const res = await fetch("http://localhost:11434/api/generate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: "mistral",
-        prompt: prompt(input),
-        stream: false
-      })
+      body: JSON.stringify({ model: "mistral", prompt: prompt(input), stream: false })
     });
     const data = await res.json();
     return clean(data.response);
@@ -135,6 +134,21 @@ function fallback(input) {
 
   if (input.includes("start") || input.includes("run")) return ["npm start"];
 
+  if (input.includes("file")) {
+    const match = input.match(/file\s([a-z0-9._-]+)/);
+    const name = match ? match[1] : "index.js";
+    return [`touch ${name}`];
+  }
+
+  if (input.includes("git init")) return ["git init"];
+  if (input.includes("commit")) return ["git add .", "git commit -m 'auto commit'"];
+  if (input.includes("branch") || input.includes("feature")) {
+    const name = input.replace(/create|branch|feature/g, "").trim().replace(/\s+/g, "-");
+    return [`git checkout -b ${name || "new-branch"}`];
+  }
+
+  if (input.includes("push")) return ["git push -f"];
+
   return null;
 }
 
@@ -152,28 +166,52 @@ function run(cmd, cwd) {
 // ===== FIX =====
 async function fixCommand(cmd, error, input) {
   const fixPrompt = `
-Fix this shell command.
+Command failed.
 
-Command: ${cmd}
-Error: ${error}
+Original command:
+${cmd}
 
-Return ONLY fixed command.
+Error:
+${error}
+
+User intent:
+${input}
+
+Return ONLY ONE corrected shell command.
+No explanation. No backticks. No extra text.
 `;
-
   try {
-    const res = await fetch("http://localhost:11434/api/generate", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ model: "mistral", prompt: fixPrompt, stream: false })
-    });
-    const data = await res.json();
-    const out = data.response.trim();
-    if (!isValidCommand(out)) return null;
-    return out;
+    let res;
+    if (PROVIDER === "ollama") {
+      const r = await fetch("http://localhost:11434/api/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model: "mistral", prompt: fixPrompt, stream: false })
+      });
+      const data = await r.json();
+      res = data.response;
+    }
+
+    if (PROVIDER === "openai") {
+      const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+      const r = await client.chat.completions.create({
+        model: "gpt-4o-mini",
+        messages: [{ role: "user", content: fixPrompt }]
+      });
+      res = r.choices[0].message.content;
+    }
+
+    if (!res) return null;
+
+    const lines = res.split("\n").map(l => l.trim()).filter(Boolean);
+    for (let l of lines) {
+      if (isValidCommand(l)) return l;
+    }
+    return null;
   } catch { return null; }
 }
 
-// ===== AGENT MODE =====
+// ===== AGENT EXECUTION WITH CONFIRM =====
 async function agentExecute(commands, input) {
   let cwd = process.cwd();
 
@@ -188,13 +226,29 @@ async function agentExecute(commands, input) {
 
     console.log(chalk.blue("👉", cmd));
 
+    // === ASK USER BEFORE EXECUTION ===
+    const { ok } = await inquirer.prompt([
+      { type: "confirm", name: "ok", message: "run?" }
+    ]);
+    if (!ok) {
+      console.log(chalk.yellow("⏭ skipped"));
+      continue;
+    }
+
     let result = await run(cmd, cwd);
 
     if (result.error) {
       console.log("❌ fixing...");
       const fixed = await fixCommand(cmd, result.error, input);
-      if (!fixed) { console.log("❌ failed"); continue; }
+      if (!fixed) { console.log("❌ could not fix"); continue; }
       console.log("🔁", fixed);
+
+      // Ask again before retrying
+      const { retry } = await inquirer.prompt([
+        { type: "confirm", name: "retry", message: "run fixed command?" }
+      ]);
+      if (!retry) continue;
+
       await run(fixed, cwd);
     }
   }
@@ -215,7 +269,6 @@ program.action(async (input) => {
 
   console.log(chalk.green(JSON.stringify(cmd, null, 2)));
 
-  // ==== AGENT MODE ====
   await agentExecute(cmd, input);
 });
 

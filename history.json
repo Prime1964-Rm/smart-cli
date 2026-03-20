@@ -11,6 +11,18 @@
     {
       "input": "add all changes in git to stage and then commit them with initial commit message and then push them to origin",
       "time": 1774004836527
+    },
+    {
+      "input": "do a force push",
+      "time": 1774005006540
+    },
+    {
+      "input": "do a force push",
+      "time": 1774005320411
+    },
+    {
+      "input": "add all files to stage and commit and push commit message would be - adding manual execution",
+      "time": 1774005832739
     }
   ]
 }
