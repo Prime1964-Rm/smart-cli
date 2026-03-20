@@ -1,0 +1,11 @@
+Ollama (default)
+SMARTCLI_PROVIDER=ollama node index.js "create branch auth"
+OpenAI
+export OPENAI_API_KEY=xxx
+SMARTCLI_PROVIDER=openai node index.js "commit changes"
+DeepSeek
+export DEEPSEEK_API_KEY=xxx
+SMARTCLI_PROVIDER=deepseek node index.js "start project"
+
+If you want next:
+👉 multi-step execution / repo awareness
